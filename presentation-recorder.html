@@ -1,0 +1,1558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CueDeck — On-Air Recorder</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #efebe2;
+    --panel: #ffffff;
+    --panel-2: #e3ddd0;
+    --ink: #1d1c19;
+    --muted: #8c8579;
+    --line: #d8d0c1;
+    --accent: #3f9e6d;        /* preview / standby tally — green */
+    --accent-soft: #e2f0e7;
+    --live: #d6402f;          /* on-air / record tally — red */
+    --live-glow: rgba(214,64,47,.32);
+    --prompt-bg: #0b0c0d;
+    --prompt-text: #f6c863;
+    --radius: 6px;
+  }
+  *{ box-sizing: border-box; }
+  html,body{ height:100%; overflow:hidden; }
+  body{
+    margin:0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Layout shell ---------- */
+  .app{
+    display:flex;
+    flex-direction:column;
+    height:100vh;
+    overflow:hidden;
+  }
+
+  header{
+    display:flex;
+    align-items:center;
+    gap:18px;
+    padding:16px 24px;
+    border-bottom:2px solid var(--ink);
+    flex-wrap:wrap;
+  }
+  .brand{
+    display:flex;
+    align-items:baseline;
+    gap:12px;
+    margin-right:auto;
+  }
+  .brand-logo{
+    font-family:'Oswald', sans-serif;
+    font-weight:700;
+    font-size:1.4rem;
+    letter-spacing:.05em;
+    text-transform:uppercase;
+  }
+  .brand-logo .hi{ color: var(--accent); }
+  .brand-tag{
+    font-family:'JetBrains Mono', monospace;
+    font-size:.62rem;
+    letter-spacing:.22em;
+    text-transform:uppercase;
+    color: var(--muted);
+  }
+
+  .tally{
+    display:flex; align-items:center; gap:8px;
+    font-family:'Oswald', sans-serif;
+    font-size:.72rem;
+    font-weight:500;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color: var(--muted);
+    padding:7px 14px;
+    border:1px solid var(--line);
+    border-radius:999px;
+    background: var(--panel);
+  }
+  .tally .lamp{
+    width:9px; height:9px; border-radius:50%;
+    background: var(--line);
+    box-shadow: inset 0 0 0 2px var(--panel-2);
+  }
+  .tally.live{ color: var(--live); border-color: var(--live); background:#fff; }
+  .tally.live .lamp{
+    background: var(--live);
+    box-shadow: 0 0 0 4px var(--live-glow);
+    animation: lamp-pulse 1.2s infinite;
+  }
+  @keyframes lamp-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.5; } }
+
+  /* ---------- Buttons & form basics ---------- */
+  .btn{
+    appearance:none;
+    border:1px solid var(--line);
+    background: var(--panel);
+    color: var(--ink);
+    padding:10px 18px;
+    border-radius: var(--radius);
+    font-family:'Oswald', sans-serif;
+    font-size:.78rem;
+    font-weight:500;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    cursor:pointer;
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    transition: border-color .15s, background .15s, color .15s, transform .1s;
+    white-space:nowrap;
+  }
+  .btn:hover{ border-color: var(--accent); color: var(--accent); }
+  .btn:active{ transform: translateY(1px); }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .btn-primary{
+    background: var(--ink);
+    color: var(--bg);
+    border-color: var(--ink);
+  }
+  .btn-primary:hover{ background: var(--accent); border-color: var(--accent); color:#fff; }
+  input[type="file"]{ display:none; }
+
+  select{
+    width:100%;
+    background: var(--panel-2);
+    color: var(--ink);
+    border:1px solid var(--line);
+    border-radius: var(--radius);
+    padding:8px 10px;
+    font-size:.82rem;
+    font-family:'Inter', sans-serif;
+  }
+
+  /* fader-style range inputs */
+  input[type="range"]{
+    -webkit-appearance:none;
+    appearance:none;
+    flex:1;
+    height:3px;
+    background: var(--line);
+    border-radius:2px;
+    outline:none;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none;
+    width:14px; height:20px;
+    border-radius:3px;
+    background: var(--ink);
+    border:2px solid var(--accent);
+    cursor:pointer;
+    margin-top:-1px;
+  }
+  input[type="range"]::-moz-range-thumb{
+    width:14px; height:20px;
+    border-radius:3px;
+    background: var(--ink);
+    border:2px solid var(--accent);
+    cursor:pointer;
+  }
+
+  /* ---------- Main grid ---------- */
+  main{
+    flex:1;
+    display:grid;
+    grid-template-columns: 1fr 360px;
+    gap: 20px;
+    padding: 20px 24px;
+    align-items:stretch;
+    min-height:0;
+  }
+  @media (max-width: 980px){
+    main{ grid-template-columns: 1fr; }
+  }
+
+  .stage{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+    height:100%;
+    min-height:0;
+  }
+
+  /* "Monitor" frame around the composite canvas */
+  .monitor{
+    flex:1;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    background: var(--panel-2);
+    border:1px solid var(--line);
+    border-radius: var(--radius);
+    padding:12px;
+  }
+  .monitor-label{
+    font-family:'JetBrains Mono', monospace;
+    font-size:.65rem;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color: var(--muted);
+    margin: 0 0 8px 2px;
+  }
+  .canvas-container{
+    flex:1;
+    min-height:0;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:100%;
+  }
+  .canvas-wrap{
+    position:relative;
+    width:auto;
+    height:auto;
+    max-width:100%;
+    max-height:100%;
+    aspect-ratio: 16/9;
+    background:#000;
+    border-radius:3px;
+    overflow:hidden;
+  }
+  .canvas-wrap canvas{ width:100%; height:100%; display:block; }
+
+  .canvas-placeholder{
+    position:absolute;
+    inset:0;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:10px;
+    color:#9aa0a6;
+    text-align:center;
+    padding:0 26px;
+    font-size:.9rem;
+    line-height:1.5;
+  }
+  .canvas-placeholder strong{
+    color:#f1efe9;
+    font-family:'Oswald', sans-serif;
+    font-size:1.05rem;
+    letter-spacing:.04em;
+    text-transform:uppercase;
+  }
+
+  .bracket{
+    position:absolute;
+    width:24px; height:24px;
+    border: 3px solid var(--accent);
+    opacity:.8;
+    pointer-events:none;
+  }
+  .bracket.tl{ top:10px; left:10px; border-right:none; border-bottom:none; }
+  .bracket.tr{ top:10px; right:10px; border-left:none; border-bottom:none; }
+  .bracket.bl{ bottom:10px; left:10px; border-right:none; border-top:none; }
+  .bracket.br{ bottom:10px; right:10px; border-left:none; border-top:none; }
+
+  .rec-badge{
+    position:absolute;
+    bottom:14px; left:14px;
+    display:flex; align-items:center; gap:8px;
+    background: rgba(10,10,10,.72);
+    border:1px solid var(--live);
+    color:#fff;
+    padding:6px 12px;
+    border-radius:4px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:.78rem;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    opacity:0;
+    transition: opacity .2s;
+    pointer-events:none;
+  }
+  .rec-badge.visible{ opacity:1; }
+  .rec-badge .ring{
+    width:9px; height:9px; border-radius:50%;
+    background: var(--live);
+    animation: lamp-pulse 1.2s infinite;
+  }
+
+  /* Transport / slide navigation */
+  .transport{
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    gap:22px;
+  }
+  .btn-icon{
+    width:42px; height:42px;
+    border-radius:50%;
+    border:1px solid var(--line);
+    background: var(--panel);
+    font-size:1rem;
+    line-height:1;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    color: var(--ink);
+    transition: border-color .15s, color .15s;
+  }
+  .btn-icon:hover{ border-color: var(--accent); color: var(--accent); }
+  .btn-icon:disabled{ opacity:.35; cursor:not-allowed; }
+  .counter{
+    font-family:'Oswald', sans-serif;
+    font-size:1.05rem;
+    letter-spacing:.2em;
+    min-width:96px;
+    text-align:center;
+  }
+
+  .slide-thumbs{
+    display:flex;
+    gap:8px;
+    overflow-x:auto;
+    padding-bottom:4px;
+  }
+  .slide-thumbs::-webkit-scrollbar{ height:6px; }
+  .slide-thumbs::-webkit-scrollbar-thumb{ background: var(--line); border-radius:3px; }
+  .thumb{
+    flex:0 0 auto;
+    width:96px;
+    aspect-ratio:16/9;
+    border:2px solid var(--line);
+    border-radius:4px;
+    overflow:hidden;
+    cursor:pointer;
+    background:#000;
+    position:relative;
+    transition: border-color .15s;
+  }
+  .thumb canvas{ width:100%; height:100%; display:block; }
+  .thumb.active{ border-color: var(--accent); }
+  .thumb .num{
+    position:absolute; bottom:2px; right:4px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:.6rem;
+    color:#fff;
+    background: rgba(0,0,0,.5);
+    padding:1px 4px;
+    border-radius:3px;
+  }
+
+  /* ---------- Side console ---------- */
+  .side{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+    height:100%;
+    min-height:0;
+  }
+  .panel{
+    background: var(--panel);
+    border:1px solid var(--line);
+    border-radius: var(--radius);
+    padding:16px;
+  }
+  .teleprompter-panel{
+    flex:1;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+  }
+  .teleprompter-panel .prompter{
+    flex:1;
+    min-height:0;
+  }
+  .panel h3{
+    margin:0 0 12px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:.7rem;
+    letter-spacing:.18em;
+    text-transform:uppercase;
+    color: var(--muted);
+    font-weight:500;
+    display:flex; align-items:center; gap:8px;
+  }
+  .panel h3 .ch{ color: var(--accent); }
+  .panel h3::after{
+    content:'';
+    flex:1;
+    height:1px;
+    background: var(--line);
+  }
+
+  .prompter-controls{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    margin-bottom:10px;
+    flex-wrap:wrap;
+  }
+  .prompter-controls label{
+    font-size:.72rem;
+    letter-spacing:.05em;
+    color: var(--muted);
+    display:flex;
+    align-items:center;
+    gap:6px;
+    text-transform:uppercase;
+    font-family:'JetBrains Mono', monospace;
+  }
+  .prompter-controls input[type="range"]{ width:70px; }
+
+  .prompter{
+    position:relative;
+    flex:1;
+    min-height:0;
+    background: var(--prompt-bg);
+    border-radius:4px;
+    overflow:hidden;
+  }
+  .prompter-track{
+    height:100%;
+    overflow-y:auto;
+    padding: 16px;
+    scroll-behavior: smooth;
+  }
+  .prompter-track::-webkit-scrollbar{
+    width:6px;
+  }
+  .prompter-track::-webkit-scrollbar-thumb{
+    background: rgba(255,255,255,0.15);
+    border-radius:3px;
+  }
+  .prompter-track::-webkit-scrollbar-thumb:hover{
+    background: rgba(255,255,255,0.3);
+  }
+  .prompter-text{
+    font-family:'JetBrains Mono', monospace;
+    color: var(--prompt-text);
+    line-height:1.7;
+    white-space:pre-wrap;
+    text-shadow: 0 0 10px rgba(246,200,99,.3);
+  }
+  .prompter-text.empty{ color:#6b6f74; font-style:italic; }
+
+  /* Media Chips in Header */
+  .media-chips {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 10px 4px 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: .68rem;
+    color: var(--ink);
+    gap: 8px;
+    transition: border-color .15s, background .15s;
+  }
+  .chip:hover {
+    border-color: var(--accent);
+  }
+  .chip.off {
+    background: var(--panel-2);
+    border-color: var(--line);
+    opacity: 0.75;
+  }
+  .chip-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    transition: background .15s;
+  }
+  .chip.off .chip-dot {
+    background: var(--muted);
+  }
+  .chip-label {
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+  }
+  .chip select {
+    background: transparent;
+    border: none;
+    padding: 0 4px 0 0;
+    font-family: 'Inter', sans-serif;
+    font-size: .72rem;
+    font-weight: 500;
+    color: var(--ink);
+    cursor: pointer;
+    outline: none;
+    max-width: 130px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+    width: auto;
+  }
+  .chip select option {
+    background: var(--panel);
+    color: var(--ink);
+    font-family: 'Inter', sans-serif;
+  }
+  .chip-toggle {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    font-size: .85rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ink);
+    transition: opacity .15s, transform .1s;
+    border-left: 1px solid var(--line);
+    padding-left: 8px;
+    margin-left: 2px;
+  }
+  .chip-toggle:hover {
+    opacity: 0.7;
+  }
+  .chip-toggle:active {
+    transform: scale(0.9);
+  }
+
+  .row{ display:flex; gap:10px; align-items:center; }
+  .row.between{ justify-content:space-between; }
+  .field-label{
+    font-size:.7rem;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color: var(--muted);
+    font-family:'JetBrains Mono', monospace;
+    white-space:nowrap;
+  }
+
+  /* ---------- Footer transport bar ---------- */
+  .footer-controls{
+    display:flex;
+    align-items:center;
+    gap:16px;
+    padding: 16px 24px 22px;
+    border-top:1px solid var(--line);
+    flex-wrap:wrap;
+  }
+  .rec-button{
+    position:relative;
+    display:inline-flex;
+    align-items:center;
+    gap:10px;
+    padding:11px 22px 11px 16px;
+    border:2px solid var(--live);
+    border-radius:999px;
+    background: var(--panel);
+    color: var(--live);
+    font-family:'Oswald', sans-serif;
+    font-size:.82rem;
+    font-weight:600;
+    letter-spacing:.14em;
+    text-transform:uppercase;
+    cursor:pointer;
+    transition: background .15s, color .15s;
+  }
+  .rec-button::before{
+    content:'';
+    width:13px; height:13px;
+    border-radius:50%;
+    background: var(--live);
+    flex:0 0 auto;
+  }
+  .rec-button:hover:not(:disabled){ background: var(--live); color:#fff; }
+  .rec-button:disabled{ opacity:.35; cursor:not-allowed; }
+  .rec-button.is-recording{
+    background: var(--live);
+    color:#fff;
+    animation: rec-pulse 1.6s infinite;
+  }
+  .rec-button.is-recording::before{ background:#fff; }
+  @keyframes rec-pulse{
+    0%,100%{ box-shadow:0 0 0 0 var(--live-glow); }
+    50%{ box-shadow:0 0 0 9px var(--live-glow); }
+  }
+
+  .timer{
+    font-family:'JetBrains Mono', monospace;
+    font-size:1.05rem;
+    letter-spacing:.05em;
+    color: var(--muted);
+    background: var(--panel-2);
+    border:1px solid var(--line);
+    border-radius: var(--radius);
+    padding:8px 14px;
+    min-width:74px;
+    text-align:center;
+  }
+  .timer.active{ color: var(--live); border-color: var(--live); background:#fff; }
+
+  a.download-link{
+    color: var(--accent);
+    font-family:'Oswald', sans-serif;
+    font-size:.78rem;
+    font-weight:500;
+    letter-spacing:.1em;
+    text-transform:uppercase;
+    text-decoration:none;
+    border:1px solid var(--accent);
+    padding:10px 18px;
+    border-radius: var(--radius);
+    display:none;
+  }
+  a.download-link.visible{ display:inline-flex; align-items:center; gap:6px; }
+  a.download-link:hover{ background: var(--accent-soft); }
+
+  .hint{
+    font-size:.72rem;
+    color: var(--muted);
+    margin-left:auto;
+    font-family:'JetBrains Mono', monospace;
+  }
+  .hint kbd{
+    background: var(--panel-2);
+    border:1px solid var(--line);
+    border-radius:4px;
+    padding:1px 6px;
+    font-family:'JetBrains Mono', monospace;
+  }
+
+  .status{
+    font-size:.74rem;
+    color: var(--muted);
+    font-family:'JetBrains Mono', monospace;
+  }
+  .status.error{ color: var(--live); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <header>
+    <div class="brand">
+      <span class="brand-logo">Cue<span class="hi">Deck</span></span>
+      <span class="brand-tag">On-Air Recorder</span>
+    </div>
+
+    <div class="tally" id="tallyIndicator">
+      <span class="lamp"></span>
+      <span id="tallyLabel">Standby</span>
+    </div>
+
+    <div class="media-chips">
+      <!-- Camera Chip -->
+      <div class="chip" id="camChip">
+        <span class="chip-dot" id="camDot"></span>
+        <span class="chip-label">CAM:</span>
+        <select id="cameraSelect"><option>Allow camera access…</option></select>
+        <button class="chip-toggle" id="toggleCamBtn" title="Toggle Camera">📹</button>
+      </div>
+
+      <!-- Microphone Chip -->
+      <div class="chip" id="micChip">
+        <span class="chip-dot" id="micDot"></span>
+        <span class="chip-label">MIC:</span>
+        <select id="micSelect"><option>Allow microphone access…</option></select>
+        <button class="chip-toggle" id="toggleMicBtn" title="Toggle Microphone">🎤</button>
+      </div>
+    </div>
+
+    <label class="btn btn-primary" for="pptxInput">Load Deck</label>
+    <input type="file" id="pptxInput" accept=".pptx">
+
+    <span class="status" id="statusLine"></span>
+
+    <!-- Hidden video stream for canvas drawing -->
+    <video id="webcamVideo" autoplay muted playsinline style="position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none;"></video>
+  </header>
+
+  <main>
+    <!-- LEFT: Stage -->
+    <section class="stage">
+      <div class="monitor">
+        <div class="monitor-label">Monitor 01 · Program Out</div>
+        <div class="canvas-container">
+          <div class="canvas-wrap" id="canvasWrap">
+            <canvas id="compositeCanvas" width="1280" height="720"></canvas>
+            <div class="canvas-placeholder" id="placeholder">
+              <strong>No deck loaded</strong>
+              <span>Load a .pptx file to bring slides and your webcam onto Program Out.<br>Speaker notes stay off this feed — only slides and camera are recorded.</span>
+            </div>
+            <span class="bracket tl"></span>
+            <span class="bracket tr"></span>
+            <span class="bracket bl"></span>
+            <span class="bracket br"></span>
+            <div class="rec-badge" id="recBadge"><span class="ring"></span> On Air <span id="recBadgeTime">00:00</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="transport">
+        <button class="btn-icon" id="prevBtn" disabled title="Previous slide">◁</button>
+        <span class="counter" id="slideCounter">— / —</span>
+        <button class="btn-icon" id="nextBtn" disabled title="Next slide">▷</button>
+      </div>
+
+      <div class="slide-thumbs" id="slideThumbs"></div>
+    </section>
+
+    <!-- RIGHT: Console -->
+    <section class="side">
+
+      <div class="panel teleprompter-panel">
+        <h3><span class="ch">01</span> Teleprompter</h3>
+        <div class="prompter-controls">
+          <label>Size <input type="range" id="fontSizeSlider" min="12" max="40" value="12"></label>
+        </div>
+        <div class="prompter">
+          <div class="prompter-track" id="prompterTrack">
+            <div class="prompter-text empty" id="prompterText">Load a deck to pull in speaker notes for each slide.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3><span class="ch">02</span> PIP Frame</h3>
+        <div class="row between" style="margin-bottom:14px;">
+          <span class="field-label">Position</span>
+          <select id="pipPosition" style="width:auto;">
+            <option value="br" selected>Bottom right</option>
+            <option value="bl">Bottom left</option>
+            <option value="tr">Top right</option>
+            <option value="tl">Top left</option>
+          </select>
+        </div>
+        <div class="row between">
+          <span class="field-label">Size</span>
+          <input type="range" id="pipSizeSlider" min="15" max="45" value="28">
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <div class="footer-controls">
+    <button class="rec-button" id="recordBtn" disabled>Start Recording</button>
+    <span class="timer" id="timerDisplay">00:00</span>
+    <a href="#" class="download-link" id="downloadLink" download>Download Recording</a>
+    <span class="hint">Press <kbd>Space</kbd> to start/stop recording · <kbd>←</kbd>/<kbd>→</kbd> to change slides</span>
+  </div>
+
+</div>
+
+<script>
+(() => {
+  // ---------------------------------------------------------------------
+  // Constants & state
+  // ---------------------------------------------------------------------
+  const EMU_PER_PX = 9525;            // 96 DPI
+  const COMPOSITE_W = 1280;
+  const COMPOSITE_H = 720;
+
+  const emuToPx = emu => Math.round(parseInt(emu, 10) / EMU_PER_PX);
+  const ptToPx  = pt  => pt * (96 / 72);
+
+  let pptxData = null;        // { widthPx, heightPx, slides: [...] }
+  let slideCanvasCache = [];  // pre-rendered offscreen canvases (audience view)
+  let currentSlideIndex = 0;
+
+  let webcamStream = null;
+  let camEnabled = true;
+  let micEnabled = true;
+
+  let recorder = null;
+  let recordedChunks = [];
+  let isRecording = false;
+  let recordStartTime = 0;
+  let timerInterval = null;
+  let rafId = null;
+
+  let pipPosition = 'br';
+  let pipScale = 0.28;
+
+  // ---------------------------------------------------------------------
+  // DOM refs
+  // ---------------------------------------------------------------------
+  const pptxInput      = document.getElementById('pptxInput');
+  const statusLine     = document.getElementById('statusLine');
+  const compositeCanvas= document.getElementById('compositeCanvas');
+  const cctx           = compositeCanvas.getContext('2d');
+  const placeholder    = document.getElementById('placeholder');
+  const recBadge       = document.getElementById('recBadge');
+  const recBadgeTime   = document.getElementById('recBadgeTime');
+  const tallyIndicator = document.getElementById('tallyIndicator');
+  const tallyLabel     = document.getElementById('tallyLabel');
+
+  const prevBtn        = document.getElementById('prevBtn');
+  const nextBtn        = document.getElementById('nextBtn');
+  const slideCounter   = document.getElementById('slideCounter');
+  const slideThumbs    = document.getElementById('slideThumbs');
+
+  const prompterTrack  = document.getElementById('prompterTrack');
+  const prompterText   = document.getElementById('prompterText');
+  const fontSizeSlider = document.getElementById('fontSizeSlider');
+
+  const cameraSelect   = document.getElementById('cameraSelect');
+  const micSelect      = document.getElementById('micSelect');
+  const webcamVideo    = document.getElementById('webcamVideo');
+  const toggleCamBtn   = document.getElementById('toggleCamBtn');
+  const toggleMicBtn   = document.getElementById('toggleMicBtn');
+
+  const pipPositionSel = document.getElementById('pipPosition');
+  const pipSizeSlider  = document.getElementById('pipSizeSlider');
+
+  const recordBtn      = document.getElementById('recordBtn');
+  const timerDisplay    = document.getElementById('timerDisplay');
+  const downloadLink   = document.getElementById('downloadLink');
+
+  // ---------------------------------------------------------------------
+  // Status helper
+  // ---------------------------------------------------------------------
+  function setStatus(msg, isError = false) {
+    statusLine.textContent = msg || '';
+    statusLine.classList.toggle('error', !!isError);
+  }
+
+  // =======================================================================
+  //  PPTX PARSING
+  // =======================================================================
+
+  function resolvePath(baseDir, relPath) {
+    const baseParts = baseDir.split('/').filter(Boolean);
+    const relParts = relPath.split('/');
+    for (const part of relParts) {
+      if (part === '..') baseParts.pop();
+      else if (part === '.' || part === '') continue;
+      else baseParts.push(part);
+    }
+    return baseParts.join('/');
+  }
+
+  function relsMap(doc) {
+    const map = {};
+    if (!doc) return map;
+    Array.from(doc.getElementsByTagName('Relationship')).forEach(r => {
+      map[r.getAttribute('Id')] = r.getAttribute('Target');
+    });
+    return map;
+  }
+
+  function getSrgbColor(el) {
+    if (!el) return null;
+    const srgb = el.getElementsByTagName('a:srgbClr')[0];
+    if (srgb) return '#' + srgb.getAttribute('val');
+    return null;
+  }
+
+  // Extract a text-bearing shape (title, body, etc.)
+  function extractShape(spEl, slideW, slideH) {
+    const txBody = spEl.getElementsByTagName('p:txBody')[0];
+    if (!txBody) return null;
+
+    let x, y, w, h;
+    const xfrm = spEl.getElementsByTagName('a:xfrm')[0];
+    if (xfrm) {
+      const off = xfrm.getElementsByTagName('a:off')[0];
+      const ext = xfrm.getElementsByTagName('a:ext')[0];
+      if (off && ext) {
+        x = emuToPx(off.getAttribute('x'));
+        y = emuToPx(off.getAttribute('y'));
+        w = emuToPx(ext.getAttribute('cx'));
+        h = emuToPx(ext.getAttribute('cy'));
+      }
+    }
+    if (x === undefined) {
+      // Fallback layout when a shape has no explicit position (common for
+      // inherited placeholders) — approximate title / body regions.
+      const ph = spEl.getElementsByTagName('p:ph')[0];
+      const type = ph ? (ph.getAttribute('type') || 'body') : 'body';
+      if (type === 'title' || type === 'ctrTitle') {
+        x = slideW * 0.06; y = slideH * 0.05; w = slideW * 0.88; h = slideH * 0.18;
+      } else {
+        x = slideW * 0.06; y = slideH * 0.26; w = slideW * 0.88; h = slideH * 0.66;
+      }
+    }
+
+    const paragraphs = [];
+    for (const p of Array.from(txBody.getElementsByTagName('a:p'))) {
+      const pPr = p.getElementsByTagName('a:pPr')[0];
+      const algn = pPr ? pPr.getAttribute('algn') : null;
+      const runs = [];
+      for (const child of Array.from(p.children)) {
+        if (child.tagName === 'a:r') {
+          const tEl = child.getElementsByTagName('a:t')[0];
+          const text = tEl ? tEl.textContent : '';
+          const rPr = child.getElementsByTagName('a:rPr')[0];
+          let size = 18, bold = false, color = '#1a1a1a';
+          if (rPr) {
+            const szAttr = rPr.getAttribute('sz');
+            if (szAttr) size = parseInt(szAttr, 10) / 100;
+            if (rPr.getAttribute('b') === '1') bold = true;
+            const c = getSrgbColor(rPr);
+            if (c) color = c;
+          }
+          if (text) runs.push({ text, size, bold, color });
+        } else if (child.tagName === 'a:br') {
+          runs.push({ brk: true });
+        }
+      }
+      if (runs.length) paragraphs.push({ algn: algn || 'l', runs });
+    }
+    if (!paragraphs.length) return null;
+    return { type: 'text', x, y, w, h, paragraphs };
+  }
+
+  async function extractPicture(picEl, zip, sRels, slideDir) {
+    try {
+      const blip = picEl.getElementsByTagName('a:blip')[0];
+      if (!blip) return null;
+      const rId = blip.getAttribute('r:embed');
+      if (!rId || !sRels[rId]) return null;
+
+      const imgPath = resolvePath(slideDir, sRels[rId]);
+      const imgFile = zip.file(imgPath);
+      if (!imgFile) return null;
+
+      const blob = await imgFile.async('blob');
+      const url = URL.createObjectURL(blob);
+
+      let x = 0, y = 0, w = 100, h = 100;
+      const xfrm = picEl.getElementsByTagName('a:xfrm')[0];
+      if (xfrm) {
+        const off = xfrm.getElementsByTagName('a:off')[0];
+        const ext = xfrm.getElementsByTagName('a:ext')[0];
+        if (off && ext) {
+          x = emuToPx(off.getAttribute('x'));
+          y = emuToPx(off.getAttribute('y'));
+          w = emuToPx(ext.getAttribute('cx'));
+          h = emuToPx(ext.getAttribute('cy'));
+        }
+      }
+
+      const img = new Image();
+      const ok = await new Promise(res => {
+        img.onload = () => res(true);
+        img.onerror = () => res(false);
+        img.src = url;
+      });
+
+      // Some embedded formats (EMF/WMF, certain TIFFs) can't be decoded by
+      // the browser's <img> element. Skip these rather than passing a
+      // "broken" image into drawImage later.
+      if (!ok || !img.naturalWidth || !img.naturalHeight) {
+        URL.revokeObjectURL(url);
+        return null;
+      }
+
+      return { type: 'image', x, y, w, h, img };
+    } catch (err) {
+      console.warn('Skipping image that could not be loaded:', err);
+      return null;
+    }
+  }
+
+  function extractNotesText(notesDoc) {
+    const sps = Array.from(notesDoc.getElementsByTagName('p:sp'));
+    for (const sp of sps) {
+      const ph = sp.getElementsByTagName('p:ph')[0];
+      if (ph && ph.getAttribute('type') === 'body') {
+        const lines = [];
+        for (const p of Array.from(sp.getElementsByTagName('a:p'))) {
+          const texts = Array.from(p.getElementsByTagName('a:t')).map(t => t.textContent);
+          lines.push(texts.join(''));
+        }
+        return lines.join('\n').trim();
+      }
+    }
+    return '';
+  }
+
+  async function parsePptx(arrayBuffer) {
+    const zip = await JSZip.loadAsync(arrayBuffer);
+    const parser = new DOMParser();
+
+    async function getXml(path) {
+      const f = zip.file(path);
+      if (!f) return null;
+      const text = await f.async('string');
+      return parser.parseFromString(text, 'application/xml');
+    }
+
+    const presDoc = await getXml('ppt/presentation.xml');
+    if (!presDoc) throw new Error('Not a valid .pptx (missing presentation.xml)');
+    const presRels = relsMap(await getXml('ppt/_rels/presentation.xml.rels'));
+
+    const sldSzEl = presDoc.getElementsByTagName('p:sldSz')[0];
+    const slideWidthPx = emuToPx(sldSzEl.getAttribute('cx'));
+    const slideHeightPx = emuToPx(sldSzEl.getAttribute('cy'));
+
+    const sldIds = Array.from(presDoc.getElementsByTagName('p:sldId'));
+    const slides = [];
+    let i = 0;
+
+    for (const sldId of sldIds) {
+      i++;
+      setStatus(`Parsing slide ${i} of ${sldIds.length}…`);
+
+      const rId = sldId.getAttribute('r:id');
+      const target = presRels[rId];
+      if (!target) continue;
+      const slidePath = 'ppt/' + target;
+
+      const slideDoc = await getXml(slidePath);
+      if (!slideDoc) continue;
+
+      const dirParts = slidePath.split('/');
+      const slideFile = dirParts.pop();
+      const slideDir = dirParts.join('/');
+      const relsPath = `${slideDir}/_rels/${slideFile}.rels`;
+      const sRels = relsMap(await getXml(relsPath));
+
+      // background colour
+      let bgColor = '#FFFFFF';
+      const bgEl = slideDoc.getElementsByTagName('p:bg')[0];
+      if (bgEl) {
+        const c = getSrgbColor(bgEl);
+        if (c) bgColor = c;
+      }
+
+      // shapes / pictures, in z-order
+      const spTree = slideDoc.getElementsByTagName('p:spTree')[0];
+      const elements = [];
+      for (const child of Array.from(spTree.children)) {
+        if (child.tagName === 'p:sp') {
+          const el = extractShape(child, slideWidthPx, slideHeightPx);
+          if (el) elements.push(el);
+        } else if (child.tagName === 'p:pic') {
+          const el = await extractPicture(child, zip, sRels, slideDir);
+          if (el) elements.push(el);
+        }
+        // graphicFrame (tables/charts) and grouped shapes intentionally
+        // skipped to keep rendering fast & predictable.
+      }
+
+      // speaker notes
+      let notes = '';
+      for (const id in sRels) {
+        if (sRels[id].includes('notesSlide')) {
+          const notesPath = resolvePath(slideDir, sRels[id]);
+          const notesDoc = await getXml(notesPath);
+          if (notesDoc) notes = extractNotesText(notesDoc);
+        }
+      }
+
+      slides.push({ bgColor, elements, notes });
+    }
+
+    return { widthPx: slideWidthPx, heightPx: slideHeightPx, slides };
+  }
+
+  // =======================================================================
+  //  SLIDE RENDERING (audience-safe canvas — never includes notes)
+  // =======================================================================
+
+  function fitRect(srcW, srcH, dstW, dstH) {
+    const srcAspect = srcW / srcH;
+    const dstAspect = dstW / dstH;
+    let w, h;
+    if (srcAspect > dstAspect) { w = dstW; h = w / srcAspect; }
+    else { h = dstH; w = h * srcAspect; }
+    return { x: (dstW - w) / 2, y: (dstH - h) / 2, w, h };
+  }
+
+  function drawTextElement(ctx, el, ox, oy, scale) {
+    const boxX = ox + el.x * scale;
+    const boxY = oy + el.y * scale;
+    const boxW = el.w * scale;
+    const boxH = el.h * scale;
+    let cursorY = boxY;
+
+    for (const para of el.paragraphs) {
+      const lines = [];
+      let currentLine = [];
+      let currentWidth = 0;
+      let lineFontSize = 0;
+
+      const flush = () => {
+        lines.push({ words: currentLine, fontSize: lineFontSize || 18 });
+        currentLine = [];
+        currentWidth = 0;
+        lineFontSize = 0;
+      };
+
+      for (const run of para.runs) {
+        if (run.brk) { flush(); continue; }
+        const fontPx = Math.max(1, ptToPx(run.size) * scale);
+        const fontStr = `${run.bold ? 'bold ' : ''}${fontPx.toFixed(1)}px Arial, sans-serif`;
+        ctx.font = fontStr;
+        const tokens = run.text.split(/(\s+)/).filter(t => t.length);
+        for (const tok of tokens) {
+          const tw = ctx.measureText(tok).width;
+          if (currentWidth + tw > boxW && currentLine.length > 0) flush();
+          currentLine.push({ text: tok, font: fontStr, color: run.color, fontPx });
+          currentWidth += tw;
+          lineFontSize = Math.max(lineFontSize, fontPx);
+        }
+      }
+      if (currentLine.length) flush();
+
+      for (const line of lines) {
+        const lineHeight = line.fontSize * 1.25;
+        cursorY += lineHeight;
+        if (cursorY > boxY + boxH + lineHeight) return; // overflow guard
+
+        let totalWidth = 0;
+        for (const w of line.words) { ctx.font = w.font; totalWidth += ctx.measureText(w.text).width; }
+
+        let curX = boxX;
+        if (para.algn === 'ctr') curX = boxX + (boxW - totalWidth) / 2;
+        else if (para.algn === 'r') curX = boxX + (boxW - totalWidth);
+
+        for (const w of line.words) {
+          ctx.font = w.font;
+          ctx.fillStyle = w.color;
+          ctx.textBaseline = 'alphabetic';
+          ctx.fillText(w.text, curX, cursorY - lineHeight * 0.28);
+          curX += ctx.measureText(w.text).width;
+        }
+      }
+    }
+  }
+
+  // Render one slide onto a fresh offscreen canvas sized to the
+  // composite output (letterboxed/pillarboxed as needed).
+  function renderSlideOffscreen(slide) {
+    const canvas = document.createElement('canvas');
+    canvas.width = COMPOSITE_W;
+    canvas.height = COMPOSITE_H;
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+
+    const rect = fitRect(pptxData.widthPx, pptxData.heightPx, COMPOSITE_W, COMPOSITE_H);
+    const scale = rect.w / pptxData.widthPx;
+
+    ctx.fillStyle = slide.bgColor;
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+    for (const el of slide.elements) {
+      try {
+        if (el.type === 'image') {
+          ctx.drawImage(el.img, rect.x + el.x * scale, rect.y + el.y * scale, el.w * scale, el.h * scale);
+        } else if (el.type === 'text') {
+          drawTextElement(ctx, el, rect.x, rect.y, scale);
+        }
+      } catch (err) {
+        console.warn('Skipping element that failed to render:', err);
+      }
+    }
+    return canvas;
+  }
+
+  function buildSlideCache() {
+    slideCanvasCache = pptxData.slides.map(renderSlideOffscreen);
+  }
+
+  function buildThumbnails() {
+    slideThumbs.innerHTML = '';
+    slideCanvasCache.forEach((canvas, idx) => {
+      const thumb = document.createElement('div');
+      thumb.className = 'thumb' + (idx === currentSlideIndex ? ' active' : '');
+      const small = document.createElement('canvas');
+      small.width = 192; small.height = 108;
+      small.getContext('2d').drawImage(canvas, 0, 0, small.width, small.height);
+      const num = document.createElement('span');
+      num.className = 'num';
+      num.textContent = idx + 1;
+      thumb.appendChild(small);
+      thumb.appendChild(num);
+      thumb.addEventListener('click', () => goToSlide(idx));
+      slideThumbs.appendChild(thumb);
+    });
+  }
+
+  function updateThumbHighlight() {
+    Array.from(slideThumbs.children).forEach((t, idx) => {
+      t.classList.toggle('active', idx === currentSlideIndex);
+    });
+  }
+
+  // =======================================================================
+  //  TELEPROMPTER
+  // =======================================================================
+
+  function updatePrompter() {
+    const slide = pptxData ? pptxData.slides[currentSlideIndex] : null;
+    const notes = slide ? slide.notes : '';
+    if (notes) {
+      prompterText.textContent = notes;
+      prompterText.classList.remove('empty');
+    } else {
+      prompterText.textContent = 'No speaker notes for this slide.';
+      prompterText.classList.add('empty');
+    }
+    prompterTrack.scrollTop = 0;
+  }
+
+  fontSizeSlider.addEventListener('input', () => {
+    prompterText.style.fontSize = fontSizeSlider.value + 'px';
+  });
+  prompterText.style.fontSize = fontSizeSlider.value + 'px';
+
+  // (Auto-scroll functionality removed)
+
+  // =======================================================================
+  //  SLIDE NAVIGATION
+  // =======================================================================
+
+  function goToSlide(idx) {
+    if (!pptxData) return;
+    currentSlideIndex = Math.max(0, Math.min(pptxData.slides.length - 1, idx));
+    slideCounter.textContent = `${currentSlideIndex + 1} / ${pptxData.slides.length}`;
+    prevBtn.disabled = currentSlideIndex === 0;
+    nextBtn.disabled = currentSlideIndex === pptxData.slides.length - 1;
+    updatePrompter();
+    updateThumbHighlight();
+  }
+
+  prevBtn.addEventListener('click', () => goToSlide(currentSlideIndex - 1));
+  nextBtn.addEventListener('click', () => goToSlide(currentSlideIndex + 1));
+
+  // =======================================================================
+  //  FILE UPLOAD
+  // =======================================================================
+
+  pptxInput.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pptx')) {
+      setStatus('Please choose a .pptx file.', true);
+      return;
+    }
+    setStatus('Reading file…');
+    placeholder.style.display = 'none';
+
+    try {
+      const buffer = await file.arrayBuffer();
+      pptxData = await parsePptx(buffer);
+      setStatus('Rendering slides…');
+      buildSlideCache();
+      buildThumbnails();
+      currentSlideIndex = 0;
+      goToSlide(0);
+      setStatus(`Loaded "${file.name}" — ${pptxData.slides.length} slide(s).`);
+      recordBtn.disabled = !webcamStream;
+    } catch (err) {
+      console.error(err);
+      setStatus('Could not read this file: ' + err.message, true);
+      placeholder.style.display = 'flex';
+    }
+  });
+
+  // =======================================================================
+  //  WEBCAM / MIC
+  // =======================================================================
+
+  async function populateDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      cameraSelect.innerHTML = '';
+      micSelect.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        if (d.kind === 'videoinput') {
+          opt.textContent = d.label || `Camera ${cameraSelect.length + 1}`;
+          cameraSelect.appendChild(opt);
+        } else if (d.kind === 'audioinput') {
+          opt.textContent = d.label || `Microphone ${micSelect.length + 1}`;
+          micSelect.appendChild(opt);
+        }
+      });
+    } catch (e) { /* ignore */ }
+  }
+
+  async function startWebcam(constraints) {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach(t => t.stop());
+    }
+    webcamStream = await navigator.mediaDevices.getUserMedia(constraints || {
+      video: { width: { ideal: 480 }, height: { ideal: 480 } },
+      audio: true
+    });
+    webcamVideo.srcObject = webcamStream;
+    await webcamVideo.play();
+    await populateDevices();
+    recordBtn.disabled = !pptxData;
+    startDrawLoop();
+  }
+
+  async function initWebcam() {
+    try {
+      await startWebcam();
+      setStatus(statusLine.textContent || 'Camera ready.');
+    } catch (err) {
+      console.error(err);
+      setStatus('Camera/microphone access was denied or unavailable.', true);
+    }
+  }
+  initWebcam();
+
+  cameraSelect.addEventListener('change', async () => {
+    if (!cameraSelect.value) return;
+    try {
+      await startWebcam({
+        video: { deviceId: { exact: cameraSelect.value }, width: { ideal: 480 }, height: { ideal: 480 } },
+        audio: micSelect.value ? { deviceId: { exact: micSelect.value } } : true
+      });
+    } catch (err) { setStatus('Could not switch camera: ' + err.message, true); }
+  });
+
+  micSelect.addEventListener('change', async () => {
+    if (!micSelect.value) return;
+    try {
+      await startWebcam({
+        video: cameraSelect.value ? { deviceId: { exact: cameraSelect.value }, width: { ideal: 480 }, height: { ideal: 480 } } : { width: { ideal: 480 }, height: { ideal: 480 } },
+        audio: { deviceId: { exact: micSelect.value } }
+      });
+    } catch (err) { setStatus('Could not switch microphone: ' + err.message, true); }
+  });
+
+  toggleCamBtn.addEventListener('click', () => {
+    camEnabled = !camEnabled;
+    if (webcamStream) webcamStream.getVideoTracks().forEach(t => t.enabled = camEnabled);
+    toggleCamBtn.classList.toggle('off', !camEnabled);
+    document.getElementById('camChip').classList.toggle('off', !camEnabled);
+  });
+
+  toggleMicBtn.addEventListener('click', () => {
+    micEnabled = !micEnabled;
+    if (webcamStream) webcamStream.getAudioTracks().forEach(t => t.enabled = micEnabled);
+    toggleMicBtn.classList.toggle('off', !micEnabled);
+    document.getElementById('micChip').classList.toggle('off', !micEnabled);
+  });
+
+  // =======================================================================
+  //  PIP CONTROLS
+  // =======================================================================
+
+  pipPositionSel.addEventListener('change', () => { pipPosition = pipPositionSel.value; });
+  pipSizeSlider.addEventListener('input', () => { pipScale = Number(pipSizeSlider.value) / 100; });
+
+  // =======================================================================
+  //  COMPOSITE DRAW LOOP  (this is exactly what gets recorded — no notes!)
+  // =======================================================================
+
+  function drawWebcamPip() {
+    if (!camEnabled || !webcamVideo.videoWidth) return;
+    const vw = webcamVideo.videoWidth, vh = webcamVideo.videoHeight;
+    const size = Math.min(vw, vh);
+    const sx = (vw - size) / 2, sy = (vh - size) / 2;
+
+    const pipSize = COMPOSITE_H * pipScale;
+    const margin = 18;
+    const radius = 16; // rounded corner radius for the PIP webcam feed
+    let px, py;
+    switch (pipPosition) {
+      case 'bl': px = margin; py = COMPOSITE_H - pipSize - margin; break;
+      case 'tr': px = COMPOSITE_W - pipSize - margin; py = margin; break;
+      case 'tl': px = margin; py = margin; break;
+      default:   px = COMPOSITE_W - pipSize - margin; py = COMPOSITE_H - pipSize - margin; break;
+    }
+
+    cctx.save();
+    cctx.beginPath();
+    if (typeof cctx.roundRect === 'function') {
+      cctx.roundRect(px, py, pipSize, pipSize, radius);
+    } else {
+      cctx.moveTo(px + radius, py);
+      cctx.lineTo(px + pipSize - radius, py);
+      cctx.quadraticCurveTo(px + pipSize, py, px + pipSize, py + radius);
+      cctx.lineTo(px + pipSize, py + pipSize - radius);
+      cctx.quadraticCurveTo(px + pipSize, py + pipSize, px + pipSize - radius, py + pipSize);
+      cctx.lineTo(px + radius, py + pipSize);
+      cctx.quadraticCurveTo(px, py + pipSize, px, py + pipSize - radius);
+      cctx.lineTo(px, py + radius);
+      cctx.quadraticCurveTo(px, py, px + radius, py);
+      cctx.closePath();
+    }
+    cctx.clip();
+
+    // mirror for a natural "selfie" look
+    cctx.translate(px + pipSize, py);
+    cctx.scale(-1, 1);
+    cctx.drawImage(webcamVideo, sx, sy, size, size, 0, 0, pipSize, pipSize);
+    cctx.restore();
+
+    cctx.lineWidth = 3;
+    cctx.strokeStyle = '#ffffff';
+    cctx.beginPath();
+    if (typeof cctx.roundRect === 'function') {
+      cctx.roundRect(px, py, pipSize, pipSize, radius);
+    } else {
+      cctx.moveTo(px + radius, py);
+      cctx.lineTo(px + pipSize - radius, py);
+      cctx.quadraticCurveTo(px + pipSize, py, px + pipSize, py + radius);
+      cctx.lineTo(px + pipSize, py + pipSize - radius);
+      cctx.quadraticCurveTo(px + pipSize, py + pipSize, px + pipSize - radius, py + pipSize);
+      cctx.lineTo(px + radius, py + pipSize);
+      cctx.quadraticCurveTo(px, py + pipSize, px, py + pipSize - radius);
+      cctx.lineTo(px, py + radius);
+      cctx.quadraticCurveTo(px, py, px + radius, py);
+      cctx.closePath();
+    }
+    cctx.stroke();
+  }
+
+  function drawFrame() {
+    if (slideCanvasCache.length) {
+      cctx.drawImage(slideCanvasCache[currentSlideIndex], 0, 0);
+    } else {
+      cctx.fillStyle = '#0c0e11';
+      cctx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+    }
+    drawWebcamPip();
+    rafId = requestAnimationFrame(drawFrame);
+  }
+
+  function startDrawLoop() {
+    if (rafId) return;
+    drawFrame();
+    placeholder.style.display = 'none';
+  }
+
+  // =======================================================================
+  //  RECORDING
+  // =======================================================================
+
+  function getSupportedMimeType() {
+    const candidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4'
+    ];
+    for (const c of candidates) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c;
+    }
+    return '';
+  }
+
+  function formatTime(ms) {
+    const totalSec = Math.floor(ms / 1000);
+    const m = String(Math.floor(totalSec / 60)).padStart(2, '0');
+    const s = String(totalSec % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  function updateTimer() {
+    const elapsed = Date.now() - recordStartTime;
+    const t = formatTime(elapsed);
+    timerDisplay.textContent = t;
+    recBadgeTime.textContent = t;
+  }
+
+  function startRecording() {
+    if (!pptxData) { setStatus('Load a presentation before recording.', true); return; }
+    if (!webcamStream) { setStatus('Camera/microphone is not ready.', true); return; }
+
+    const canvasStream = compositeCanvas.captureStream(30);
+    const audioTracks = micEnabled ? webcamStream.getAudioTracks() : [];
+    const combined = new MediaStream([...canvasStream.getVideoTracks(), ...audioTracks]);
+
+    const mimeType = getSupportedMimeType();
+    try {
+      recorder = mimeType ? new MediaRecorder(combined, { mimeType }) : new MediaRecorder(combined);
+    } catch (err) {
+      setStatus('Recording is not supported in this browser.', true);
+      return;
+    }
+
+    recordedChunks = [];
+    recorder.ondataavailable = e => { if (e.data && e.data.size > 0) recordedChunks.push(e.data); };
+    recorder.onstop = handleRecordingStop;
+    recorder.start();
+
+    isRecording = true;
+    recordStartTime = Date.now();
+    timerInterval = setInterval(updateTimer, 250);
+    updateTimer();
+
+    recordBtn.textContent = 'Stop Recording';
+    recordBtn.classList.add('is-recording');
+    timerDisplay.classList.add('active');
+    recBadge.classList.add('visible');
+    tallyIndicator.classList.add('live');
+    tallyLabel.textContent = 'On Air';
+    downloadLink.classList.remove('visible');
+    setStatus('Recording…');
+  }
+
+  function stopRecording() {
+    if (!recorder) return;
+    recorder.stop();
+    isRecording = false;
+    clearInterval(timerInterval);
+
+    recordBtn.textContent = 'Start Recording';
+    recordBtn.classList.remove('is-recording');
+    timerDisplay.classList.remove('active');
+    recBadge.classList.remove('visible');
+    tallyIndicator.classList.remove('live');
+    tallyLabel.textContent = 'Standby';
+  }
+
+  function handleRecordingStop() {
+    const mime = (recorder && recorder.mimeType) || 'video/webm';
+    const ext = mime.includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(recordedChunks, { type: mime });
+    const url = URL.createObjectURL(blob);
+
+    downloadLink.href = url;
+    downloadLink.download = `presentation-recording-${Date.now()}.${ext}`;
+    downloadLink.textContent = `Download Recording (.${ext})`;
+    downloadLink.classList.add('visible');
+    setStatus(`Recording finished — ${formatTime(Date.now() - recordStartTime)} (.${ext})`);
+  }
+
+  recordBtn.addEventListener('click', () => {
+    if (isRecording) stopRecording(); else startRecording();
+  });
+
+  // =======================================================================
+  //  KEYBOARD SHORTCUTS
+  // =======================================================================
+
+  window.addEventListener('keydown', (e) => {
+    const tag = (e.target && e.target.tagName) || '';
+    if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
+
+    if (e.code === 'Space') {
+      e.preventDefault();
+      if (!recordBtn.disabled) { isRecording ? stopRecording() : startRecording(); }
+    } else if (e.code === 'ArrowRight' || e.code === 'ArrowDown') {
+      e.preventDefault();
+      goToSlide(currentSlideIndex + 1);
+    } else if (e.code === 'ArrowLeft' || e.code === 'ArrowUp') {
+      e.preventDefault();
+      goToSlide(currentSlideIndex - 1);
+    }
+  });
+
+})();
+</script>
+</body>
+</html>
