@@ -819,7 +819,7 @@
     </div>
 
     <label class="btn btn-primary" for="pptxInput">Load Deck / PDF</label>
-    <input type="file" id="pptxInput" accept=".pptx,.pdf">
+    <input type="file" id="pptxInput" accept=".pptx,.pdf" multiple>
 
     <span class="status" id="statusLine"></span>
 
@@ -837,7 +837,9 @@
             <canvas id="compositeCanvas" width="1280" height="720"></canvas>
             <div class="canvas-placeholder" id="placeholder">
               <strong>No deck loaded</strong>
-              <span>Load a .pptx or .pdf file to bring slides and your webcam onto Program Out.<br>Speaker notes stay off this feed — only slides and camera are recorded.</span>
+              <span>Load a .pptx or .pdf file.<br>
+              <em style="color: var(--accent); display: inline-block; margin: 4px 0;">Tip: Select both matching .pptx and .pdf files at once to get high-quality slides with speaker notes!</em><br>
+              Speaker notes stay off this feed — only slides and camera are recorded.</span>
             </div>
             <span class="bracket tl"></span>
             <span class="bracket tr"></span>
@@ -920,6 +922,7 @@
   let slideCanvasCache = [];  // pre-rendered offscreen canvases (audience view)
   let currentSlideIndex = 0;
   let loadedFileName = '';
+  let savedPptxNotes = null;  // cached speaker notes from uploaded PPTX
 
   let webcamStream = null;
   let camEnabled = true;
@@ -1388,98 +1391,136 @@
   //  FILE UPLOAD
   // =======================================================================
 
+  async function loadPdfSlides(buffer, notesArray, fileName) {
+    const pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
+    const numPages = pdfDoc.numPages;
+    
+    pptxData = {
+      widthPx: COMPOSITE_W,
+      heightPx: COMPOSITE_H,
+      slides: []
+    };
+    slideCanvasCache = [];
+    
+    for (let pNum = 1; pNum <= numPages; pNum++) {
+      setStatus(`Rendering PDF page ${pNum} of ${numPages}…`);
+      const page = await pdfDoc.getPage(pNum);
+      
+      const viewport = page.getViewport({ scale: 1 });
+      const rect = fitRect(viewport.width, viewport.height, COMPOSITE_W, COMPOSITE_H);
+      
+      const tempCanvas = document.createElement('canvas');
+      tempCanvas.width = rect.w;
+      tempCanvas.height = rect.h;
+      const tempCtx = tempCanvas.getContext('2d');
+      
+      const scale = rect.w / viewport.width;
+      const scaledViewport = page.getViewport({ scale: scale });
+      
+      await page.render({
+        canvasContext: tempCtx,
+        viewport: scaledViewport
+      }).promise;
+      
+      const slideCanvas = document.createElement('canvas');
+      slideCanvas.width = COMPOSITE_W;
+      slideCanvas.height = COMPOSITE_H;
+      const sCtx = slideCanvas.getContext('2d');
+      
+      sCtx.fillStyle = '#000';
+      sCtx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
+      sCtx.drawImage(tempCanvas, rect.x, rect.y);
+      
+      slideCanvasCache.push(slideCanvas);
+      
+      let notes = '';
+      if (notesArray && notesArray[pNum - 1] !== undefined) {
+        notes = notesArray[pNum - 1];
+      } else {
+        try {
+          const textContent = await page.getTextContent();
+          notes = textContent.items.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
+        } catch (err) {
+          console.warn('Could not extract text for page ' + pNum, err);
+        }
+      }
+      
+      pptxData.slides.push({
+        bgColor: '#000000',
+        elements: [],
+        notes: notes
+      });
+    }
+    
+    buildThumbnails();
+    currentSlideIndex = 0;
+    goToSlide(0);
+    const notesSource = notesArray ? 'with speaker notes from PPTX' : 'with extracted PDF text';
+    setStatus(`Loaded PDF "${fileName}" — ${numPages} page(s) ${notesSource}.`);
+    recordBtn.disabled = !webcamStream;
+  }
+
   pptxInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    loadedFileName = file.name.substring(0, file.name.lastIndexOf('.')) || file.name;
-    const nameLower = file.name.toLowerCase();
-    const isPdf = nameLower.endsWith('.pdf');
-    const isPptx = nameLower.endsWith('.pptx');
-    if (!isPdf && !isPptx) {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+
+    const pptxFile = files.find(f => f.name.toLowerCase().endsWith('.pptx'));
+    const pdfFile = files.find(f => f.name.toLowerCase().endsWith('.pdf'));
+
+    if (!pptxFile && !pdfFile) {
       setStatus('Please choose a .pptx or .pdf file.', true);
       return;
     }
-    setStatus('Reading file…');
+
     placeholder.style.display = 'none';
 
     try {
-      const buffer = await file.arrayBuffer();
-      if (isPdf) {
-        setStatus('Parsing PDF…');
-        const pdfDoc = await pdfjsLib.getDocument({ data: buffer }).promise;
-        const numPages = pdfDoc.numPages;
-        
-        pptxData = {
-          widthPx: COMPOSITE_W,
-          heightPx: COMPOSITE_H,
-          slides: []
-        };
-        slideCanvasCache = [];
-        
-        for (let pNum = 1; pNum <= numPages; pNum++) {
-          setStatus(`Rendering PDF page ${pNum} of ${numPages}…`);
-          const page = await pdfDoc.getPage(pNum);
-          
-          const viewport = page.getViewport({ scale: 1 });
-          const rect = fitRect(viewport.width, viewport.height, COMPOSITE_W, COMPOSITE_H);
-          
-          const tempCanvas = document.createElement('canvas');
-          tempCanvas.width = rect.w;
-          tempCanvas.height = rect.h;
-          const tempCtx = tempCanvas.getContext('2d');
-          
-          const scale = rect.w / viewport.width;
-          const scaledViewport = page.getViewport({ scale: scale });
-          
-          await page.render({
-            canvasContext: tempCtx,
-            viewport: scaledViewport
-          }).promise;
-          
-          const slideCanvas = document.createElement('canvas');
-          slideCanvas.width = COMPOSITE_W;
-          slideCanvas.height = COMPOSITE_H;
-          const sCtx = slideCanvas.getContext('2d');
-          
-          sCtx.fillStyle = '#000';
-          sCtx.fillRect(0, 0, COMPOSITE_W, COMPOSITE_H);
-          sCtx.drawImage(tempCanvas, rect.x, rect.y);
-          
-          slideCanvasCache.push(slideCanvas);
-          
-          let notes = '';
-          try {
-            const textContent = await page.getTextContent();
-            notes = textContent.items.map(item => item.str).join(' ').replace(/\s+/g, ' ').trim();
-          } catch (err) {
-            console.warn('Could not extract text for page ' + pNum, err);
-          }
-          
-          pptxData.slides.push({
-            bgColor: '#000000',
-            elements: [],
-            notes: notes
-          });
-        }
-        
-        buildThumbnails();
-        currentSlideIndex = 0;
-        goToSlide(0);
-        setStatus(`Loaded PDF "${file.name}" — ${numPages} page(s).`);
-        recordBtn.disabled = !webcamStream;
-      } else {
+      if (pptxFile && pdfFile) {
+        loadedFileName = pdfFile.name.substring(0, pdfFile.name.lastIndexOf('.')) || pdfFile.name;
+        setStatus('Parsing speaker notes from PPTX...');
+        const pptxBuffer = await pptxFile.arrayBuffer();
+        const parsedPptx = await parsePptx(pptxBuffer);
+        const notesArray = parsedPptx.slides.map(s => s.notes);
+
+        setStatus('Rendering PDF slides...');
+        const pdfBuffer = await pdfFile.arrayBuffer();
+        await loadPdfSlides(pdfBuffer, notesArray, pdfFile.name);
+        return;
+      }
+
+      if (pptxFile && !pdfFile) {
+        loadedFileName = pptxFile.name.substring(0, pptxFile.name.lastIndexOf('.')) || pptxFile.name;
+        setStatus('Reading PPTX file...');
+        const buffer = await pptxFile.arrayBuffer();
         pptxData = await parsePptx(buffer);
-        setStatus('Rendering slides…');
+        
+        savedPptxNotes = pptxData.slides.map(s => s.notes);
+        
+        setStatus('Rendering slides...');
         buildSlideCache();
         buildThumbnails();
         currentSlideIndex = 0;
         goToSlide(0);
-        setStatus(`Loaded "${file.name}" — ${pptxData.slides.length} slide(s).`);
+        setStatus(`Loaded PPTX "${pptxFile.name}" (${pptxData.slides.length} slides). Tip: Upload a PDF of the same presentation for perfect rendering!`);
         recordBtn.disabled = !webcamStream;
+        return;
+      }
+
+      if (pdfFile && !pptxFile) {
+        loadedFileName = pdfFile.name.substring(0, pdfFile.name.lastIndexOf('.')) || pdfFile.name;
+        setStatus('Reading PDF file...');
+        const buffer = await pdfFile.arrayBuffer();
+        
+        let notesToUse = null;
+        if (savedPptxNotes && savedPptxNotes.length > 0) {
+          notesToUse = savedPptxNotes;
+        }
+        
+        await loadPdfSlides(buffer, notesToUse, pdfFile.name);
       }
     } catch (err) {
       console.error(err);
-      setStatus('Could not read this file: ' + err.message, true);
+      setStatus('Could not read file: ' + err.message, true);
       placeholder.style.display = 'flex';
     }
   });
