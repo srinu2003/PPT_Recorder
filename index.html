@@ -688,11 +688,14 @@
   @media (max-width: 980px) {
     html, body {
       overflow-y: auto !important;
+      overflow-x: hidden !important;
       height: auto !important;
+      width: 100vw !important;
     }
     .app {
       height: auto !important;
       overflow: visible !important;
+      width: 100% !important;
     }
     main {
       grid-template-columns: 1fr !important;
@@ -700,15 +703,20 @@
       height: auto !important;
       overflow: visible !important;
       padding: 10px 12px !important;
+      width: 100% !important;
     }
     .stage {
       height: auto !important;
       min-height: auto !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
       padding-right: 0 !important;
     }
     .side {
       height: auto !important;
       min-height: auto !important;
+      min-width: 0 !important;
+      max-width: 100% !important;
       padding-left: 0 !important;
     }
     .teleprompter-panel {
@@ -716,6 +724,11 @@
     }
     .resizer {
       display: none !important;
+    }
+    .slide-thumbs {
+      width: 100% !important;
+      max-width: 100% !important;
+      overflow-x: auto !important;
     }
   }
 
